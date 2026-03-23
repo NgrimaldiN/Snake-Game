@@ -43,6 +43,7 @@ let score = 0;
 let highScore = localStorage.getItem('snakeHighScore') || 0;
 let gameLoopId;
 let isGameOver = false;
+let waitingForFirstInput = true; // Game is frozen until the player presses a key
 
 // Snake state
 // Start in the middle
@@ -418,7 +419,10 @@ function gameLoop(currentTime) {
 	if (!lastTime) lastTime = currentTime;
 	const deltaTime = currentTime - lastTime;
 
-	if (deltaTime >= currentSpeed) {
+	if (waitingForFirstInput) {
+		// Keep lastTime fresh so the first tick fires normally once the player acts
+		lastTime = currentTime;
+	} else if (deltaTime >= currentSpeed) {
 		update();
 		lastTime = currentTime;
 	}
@@ -454,16 +458,16 @@ function handleKey(e) {
 
 	switch (e.key) {
 		case 'ArrowUp':
-			if (lastDy !== 1) inputQueue.push({ dx: 0, dy: -1 });
+			if (lastDy !== 1) { inputQueue.push({ dx: 0, dy: -1 }); waitingForFirstInput = false; }
 			break;
 		case 'ArrowDown':
-			if (lastDy !== -1) inputQueue.push({ dx: 0, dy: 1 });
+			if (lastDy !== -1) { inputQueue.push({ dx: 0, dy: 1 }); waitingForFirstInput = false; }
 			break;
 		case 'ArrowLeft':
-			if (lastDx !== 1) inputQueue.push({ dx: -1, dy: 0 });
+			if (lastDx !== 1) { inputQueue.push({ dx: -1, dy: 0 }); waitingForFirstInput = false; }
 			break;
 		case 'ArrowRight':
-			if (lastDx !== -1) inputQueue.push({ dx: 1, dy: 0 });
+			if (lastDx !== -1) { inputQueue.push({ dx: 1, dy: 0 }); waitingForFirstInput = false; }
 			break;
 	}
 }
@@ -486,9 +490,10 @@ function resetGame() {
 		{ x: 0, y: 4 }
 	];
 	dx = 1;
-	dy = 0;
+	dy = 0; // Snake faces right — valid first inputs: Right (forward), Up, Down
 	inputQueue = [];
 	isGameOver = false;
+	waitingForFirstInput = true;
 	walls = []; // Clear walls
 	applesEatenTotal = 0;
 
