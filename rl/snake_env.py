@@ -61,10 +61,8 @@ class SnakeEnv:
         -0.001 every step        (discourages looping)
     """
 
-    def __init__(self, grid_w=17, grid_h=15, n_apples=5):
-        # NOTE: verify grid_w/grid_h against the real game before training.
-        # Open Google Snake → F12 → Console:
-        #   document.querySelector('canvas').width  / <cell pixel size>
+    def __init__(self, grid_w=10, grid_h=9, n_apples=5):
+        # Google Snake small grid: 10 wide × 9 tall (matches TILE_COUNT_X/Y in snake.js)
         self.grid_w  = grid_w
         self.grid_h  = grid_h
         self.n_apples = n_apples
