@@ -1,12 +1,32 @@
 """
-Snake environment replicating Google Snake (small grid, walls, 5 apples).
+Snake environment v3 — optimized state representation for Q-learning.
 
-Usage:
-    env = SnakeEnv()
-    state = env.reset()
-    state, reward, done = env.step(action)  # action in {0, 1, 2, 3}
+Key improvements over v2:
+  1. All features are RELATIVE to the snake's heading
+     → eliminates the 4 direction bits (symmetric learning)
+  2. Danger sensing at distance 2 (straight, right, left)
+     → the snake can see traps 2 steps ahead
+  3. No approach reward (proved harmful — makes agent reckless)
 
-Grid: 17 wide x 15 tall (verify against the real game by counting tiles).
+State (16 binary floats):
+    [0]  danger straight   (dist 1)
+    [1]  danger right      (dist 1)
+    [2]  danger left       (dist 1)
+    [3]  danger straight   (dist 2)
+    [4]  danger right      (dist 2)
+    [5]  danger left       (dist 2)
+    [6]  danger diag fwd-right
+    [7]  danger diag fwd-left
+    [8]  dir up
+    [9]  dir down
+    [10] dir left
+    [11] dir right
+    [12] apple up
+    [13] apple down
+    [14] apple left
+    [15] apple right
+
+Grid: 10 wide × 9 tall.
 """
 
 import random
@@ -36,67 +56,42 @@ DIRECTION = {
 
 class SnakeEnv:
     """
-    Google Snake environment — pure Python, no libraries.
+    Google Snake environment v3 — optimized for Q-learning convergence.
 
-    State (11 floats, values 0.0 or 1.0):
-        [0] danger straight      — would die moving forward?
-        [1] danger right         — would die turning right?
-        [2] danger left          — would die turning left?
-        [3] moving up
-        [4] moving down
-        [5] moving left
-        [6] moving right
-        [7] apple is up          (relative to head)
-        [8] apple is down
-        [9] apple is left
-        [10] apple is right      (nearest apple)
-
-    Why this representation?
-        Simple enough to work with a small MLP.
-        Once that works, you can upgrade to the raw grid (17×15×4).
-
-    Reward:
-        +1.0   eating an apple
-        -1.0   trapped death     (all exits were fatal — unavoidable)
-        -5.0   suicide           (chose death when safe moves existed)
-        0.0    within grace steps after apple (free planning window)
-        exponential after grace steps, capped at -0.5/step
+    State: 16 binary features (danger + direction + apple).
+    Reward: +1.0 apple, -1.0 trapped death, -5.0 suicide,
+            exponential idle penalty after grace period.
     """
 
     def __init__(self, grid_w=10, grid_h=9, n_apples=5):
-        # Google Snake small grid: 10 wide × 9 tall (matches TILE_COUNT_X/Y in snake.js)
         self.grid_w  = grid_w
         self.grid_h  = grid_h
         self.n_apples = n_apples
 
         # Set by reset()
-        self.snake             = []   # list of (x, y), index 0 = head
+        self.snake             = []
         self.dx                = 0
         self.dy                = 0
-        self.apples            = []   # list of (x, y)
-        self.walls             = []   # list of (x, y)
+        self.apples            = []
+        self.walls             = []
         self.apples_eaten      = 0
         self.steps             = 0
-        self.steps_since_apple = 0   # resets each time an apple is eaten
+        self.steps_since_apple = 0
         self.done              = False
 
         # ── Penalty schedule ──────────────────────────────────────────────────
-        # No penalty for the first `grace` steps after eating an apple.
-        # After that: penalty = pen_base * exp(pen_rate * steps_over_grace)
-        # Capped at 0.5 so death (-1.0) is always the worst outcome.
-        self.grace    = 20     # free steps after each apple
+        self.grace    = 20
         self.pen_base = 0.001
         self.pen_rate = 0.05
 
-        # How many steps before we force-stop an episode (prevents infinite loops)
         self.max_steps = grid_w * grid_h * 4
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def reset(self):
         """Start a new episode. Returns the initial state vector."""
-        self.snake = [(2, 4), (1, 4), (0, 4)]  # head at index 0, matches JS game starting position
-        self.dx, self.dy = 1, 0   # start moving right
+        self.snake = [(2, 4), (1, 4), (0, 4)]
+        self.dx, self.dy = 1, 0
         self.apples       = [(4,2), (8,2), (6,4), (4,6), (8,6)]
         self.walls        = []
         self.apples_eaten      = 0
@@ -110,70 +105,56 @@ class SnakeEnv:
         """
         Apply action, advance the game by one tick.
 
-        Args:
-            action: int in {UP=0, DOWN=1, LEFT=2, RIGHT=3}
-
         Returns:
-            state  : list[float] — new state (11 values)
+            state  : list[float] — new state (12 values)
             reward : float
-            done   : bool — True if the episode ended (death or max_steps)
+            done   : bool
         """
         assert not self.done, "Call reset() before stepping after game over."
         self.steps += 1
 
-        # Store direction before update (needed for trap detection)
         prev_dx, prev_dy = self.dx, self.dy
 
-        # Apply direction (ignore 180° reversals — same as Google Snake)
+        # Apply direction (ignore 180° reversals)
         new_dx, new_dy = DIRECTION[action]
         if not (new_dx == -self.dx and new_dy == -self.dy):
             self.dx, self.dy = new_dx, new_dy
 
-        # Compute new head position
         hx, hy = self.snake[0]
         new_head = (hx + self.dx, hy + self.dy)
 
         # ── Collision checks → death ─────────────────────────────────────────
         if self._is_fatal(new_head):
-            # Count safe exits available from current head (excluding reverse)
             safe_exits = sum(
                 1 for ddx, ddy in DIRECTION.values()
-                if not (ddx == -prev_dx and ddy == -prev_dy)   # not reverse
-                and not self._is_fatal((hx + ddx, hy + ddy))   # not fatal
+                if not (ddx == -prev_dx and ddy == -prev_dy)
+                and not self._is_fatal((hx + ddx, hy + ddy))
             )
-            # Trapped = no way out → accidental death → small penalty
-            # Had options but chose death → suicide → large penalty
             if safe_exits == 0:
-                penalty = -1.0   # trapped — unavoidable
+                penalty = -1.0
             else:
-                penalty = -5.0   # suicide — had options
+                penalty = -5.0
             self.done = True
             return self._get_state(), penalty, True
 
         # ── Move snake ───────────────────────────────────────────────────────
         self.snake.insert(0, new_head)
-
         self.steps_since_apple += 1
 
         # ── Apple check ─────────────────────────────────────────────────────
         if new_head in self.apples:
             self.apples.remove(new_head)
             self.apples_eaten      += 1
-            self.steps_since_apple  = 0   # reset grace counter
+            self.steps_since_apple  = 0
             reward = 1.0
 
-            # Google Snake wall spawn pattern:
-            # wall after 1st apple, then after every 2nd (3rd, 5th, 7th total)
             if self.apples_eaten == 1 or (self.apples_eaten - 1) % 2 == 0:
                 self._spawn_wall()
-
-            self._spawn_apples()   # refill to n_apples
+            self._spawn_apples()
         else:
-            self.snake.pop()       # no apple → remove tail
+            self.snake.pop()
 
             # ── Exponential step penalty ──────────────────────────────────────
-            # Free for `grace` steps, then grows exponentially.
-            # Capped at 0.5 so death (-1.0) remains the worst outcome.
             over_grace = max(0, self.steps_since_apple - self.grace)
             reward     = -min(self.pen_base * math.exp(self.pen_rate * over_grace), 0.5)
 
@@ -188,25 +169,33 @@ class SnakeEnv:
 
     def _get_state(self):
         """
-        Build the 11-value feature vector the agent will learn from.
+        Build the 16-value feature vector.
 
-        Danger flags use the snake's current direction to define
-        "straight", "right", "left" — so the agent reasons in relative
-        terms, not absolute grid coordinates.
+        Danger features are relative to heading.
+        Direction and apple are absolute (needed for correct action mapping).
         """
         hx, hy = self.snake[0]
 
-        # ── Relative directions from current movement ─────────────────────
-        # straight = current direction
-        # right    = 90° clockwise turn
-        # left     = 90° counter-clockwise turn
+        # ── Relative direction vectors ────────────────────────────────────
         straight = (self.dx,       self.dy)
         right    = (-self.dy,      self.dx)
         left     = ( self.dy,     -self.dx)
 
-        danger_straight = 1.0 if self._is_fatal((hx + straight[0], hy + straight[1])) else 0.0
-        danger_right    = 1.0 if self._is_fatal((hx + right[0],    hy + right[1]))    else 0.0
-        danger_left     = 1.0 if self._is_fatal((hx + left[0],     hy + left[1]))     else 0.0
+        # ── Danger at distance 1 ─────────────────────────────────────────
+        danger_s1 = 1.0 if self._is_fatal((hx + straight[0], hy + straight[1])) else 0.0
+        danger_r1 = 1.0 if self._is_fatal((hx + right[0],    hy + right[1]))    else 0.0
+        danger_l1 = 1.0 if self._is_fatal((hx + left[0],     hy + left[1]))     else 0.0
+
+        # ── Danger at distance 2 ─────────────────────────────────────────
+        danger_s2 = 1.0 if self._is_fatal((hx + 2*straight[0], hy + 2*straight[1])) else 0.0
+        danger_r2 = 1.0 if self._is_fatal((hx + 2*right[0],    hy + 2*right[1]))    else 0.0
+        danger_l2 = 1.0 if self._is_fatal((hx + 2*left[0],     hy + 2*left[1]))     else 0.0
+
+        # ── Diagonal danger (forward-right, forward-left) ────────────────
+        danger_diag_r = 1.0 if self._is_fatal((hx + straight[0] + right[0],
+                                                hy + straight[1] + right[1])) else 0.0
+        danger_diag_l = 1.0 if self._is_fatal((hx + straight[0] + left[0],
+                                                hy + straight[1] + left[1]))  else 0.0
 
         # ── Current direction (one-hot) ───────────────────────────────────
         dir_up    = 1.0 if (self.dx, self.dy) == ( 0, -1) else 0.0
@@ -214,16 +203,17 @@ class SnakeEnv:
         dir_left  = 1.0 if (self.dx, self.dy) == (-1,  0) else 0.0
         dir_right = 1.0 if (self.dx, self.dy) == ( 1,  0) else 0.0
 
-        # ── Nearest apple direction ───────────────────────────────────────
+        # ── Nearest apple direction (absolute) ────────────────────────────
         ax, ay = self._nearest_apple()
         apple_up    = 1.0 if ay < hy else 0.0
         apple_down  = 1.0 if ay > hy else 0.0
         apple_left  = 1.0 if ax < hx else 0.0
         apple_right = 1.0 if ax > hx else 0.0
-        
 
         return [
-            danger_straight, danger_right, danger_left,
+            danger_s1, danger_r1, danger_l1,
+            danger_s2, danger_r2, danger_l2,
+            danger_diag_r, danger_diag_l,
             dir_up, dir_down, dir_left, dir_right,
             apple_up, apple_down, apple_left, apple_right,
         ]
@@ -244,9 +234,15 @@ class SnakeEnv:
     def _nearest_apple(self):
         """Return (x, y) of the closest apple by Manhattan distance."""
         if not self.apples:
-            return (self.grid_w // 2, self.grid_h // 2)  # fallback
+            return (self.grid_w // 2, self.grid_h // 2)
         hx, hy = self.snake[0]
         return min(self.apples, key=lambda a: abs(a[0] - hx) + abs(a[1] - hy))
+
+    def _dist_nearest_apple(self):
+        """Return Manhattan distance to the closest apple."""
+        ax, ay = self._nearest_apple()
+        hx, hy = self.snake[0]
+        return abs(ax - hx) + abs(ay - hy)
 
     def _spawn_apples(self):
         """Fill up to n_apples, avoiding snake, walls, and existing apples."""
@@ -264,13 +260,7 @@ class SnakeEnv:
 
     def _spawn_wall(self):
         """
-        Try to place a wall following Google Snake's placement rules:
-          - Max 17 walls
-          - Not on the snake
-          - Not on an apple
-          - At least 1-tile gap from existing walls (no adjacency)
-          - At least 3 taxicab distance from head
-          - Not in the 3×3 corners of the board
+        Try to place a wall following Google Snake's placement rules.
         """
         snake_set = set(self.snake)
         if len(self.walls) >= 17:
@@ -288,7 +278,6 @@ class SnakeEnv:
             if (x, y) in apple_set:
                 continue
 
-            # 1-tile gap from existing walls
             too_close_to_wall = any(
                 abs(wx - x) <= 1 and abs(wy - y) <= 1
                 for wx, wy in wall_set
@@ -296,11 +285,9 @@ class SnakeEnv:
             if too_close_to_wall:
                 continue
 
-            # Taxicab distance from head
             if abs(x - hx) + abs(y - hy) <= 3:
                 continue
 
-            # Corner protection (3×3 corners)
             corners = [
                 (0, 0), (self.grid_w - 1, 0),
                 (0, self.grid_h - 1), (self.grid_w - 1, self.grid_h - 1),
@@ -309,28 +296,23 @@ class SnakeEnv:
                 continue
 
             self.walls.append((x, y))
-            break  # success
+            break
 
     # ── Utility ───────────────────────────────────────────────────────────────
 
     def get_grid(self):
-        """
-        Return the full 17×15 grid as a 2D list (for debugging / future CNN use).
-        grid[y][x] is one of EMPTY, SNAKE_HEAD, SNAKE_BODY, APPLE, WALL.
-        """
+        """Return the full grid as a 2D list."""
         grid = [[EMPTY] * self.grid_w for _ in range(self.grid_h)]
-
         for wx, wy in self.walls:
             grid[wy][wx] = WALL
         for ax, ay in self.apples:
             grid[ay][ax] = APPLE
         for i, (sx, sy) in enumerate(self.snake):
             grid[sy][sx] = SNAKE_HEAD if i == 0 else SNAKE_BODY
-
         return grid
 
     def print_grid(self):
-        """ASCII render — useful for debugging without pygame."""
+        """ASCII render — useful for debugging."""
         symbols = {EMPTY: ".", SNAKE_HEAD: "H", SNAKE_BODY: "s", APPLE: "A", WALL: "#"}
         grid = self.get_grid()
         print("+" + "-" * self.grid_w + "+")
@@ -340,63 +322,48 @@ class SnakeEnv:
         print(f"Score: {self.apples_eaten}  Step: {self.steps}  Walls: {len(self.walls)}")
 
     def render(self, cell_size=60, fps=10):
-        """
-        Draw the current game state in a pygame window.
-        Call once per step. Handles its own clock.
-
-        Args:
-            cell_size : pixel size of each grid cell (default 60 matches the JS game)
-            fps       : how fast the bot plays visually
-        """
+        """Draw the current game state in a pygame window."""
         import pygame
 
-        # ── Init pygame on first call ─────────────────────────────────────────
         if not hasattr(self, '_screen'):
             pygame.init()
             w = self.grid_w * cell_size
-            h = self.grid_h * cell_size + 40   # extra 40px for score bar
+            h = self.grid_h * cell_size + 40
             self._screen = pygame.display.set_mode((w, h))
-            pygame.display.set_caption("Snake RL")
+            pygame.display.set_caption("Snake RL v3")
             self._clock  = pygame.time.Clock()
             self._font   = pygame.font.SysFont("Arial", 20)
 
-        # ── Handle window close ───────────────────────────────────────────────
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 raise SystemExit
 
-        # ── Background (checkerboard) ─────────────────────────────────────────
         for y in range(self.grid_h):
             for x in range(self.grid_w):
                 color = (170, 215, 81) if (x + y) % 2 == 0 else (162, 209, 73)
                 pygame.draw.rect(self._screen, color,
                                  (x * cell_size, y * cell_size, cell_size, cell_size))
 
-        # ── Walls ─────────────────────────────────────────────────────────────
         for wx, wy in self.walls:
             pygame.draw.rect(self._screen, (83, 138, 52),
                              (wx * cell_size, wy * cell_size, cell_size, cell_size))
-            # inner shadow to look like the JS game's bush
             pygame.draw.rect(self._screen, (60, 110, 35),
                              (wx * cell_size + 6, wy * cell_size + 6,
                               cell_size - 12, cell_size - 12))
 
-        # ── Apples ────────────────────────────────────────────────────────────
         for ax, ay in self.apples:
             cx = ax * cell_size + cell_size // 2
             cy = ay * cell_size + cell_size // 2
             pygame.draw.circle(self._screen, (220, 50, 50), (cx, cy), cell_size // 2 - 4)
 
-        # ── Snake ─────────────────────────────────────────────────────────────
         for i, (sx, sy) in enumerate(self.snake):
-            color = (30, 90, 180) if i == 0 else (75, 133, 212)   # head darker
+            color = (30, 90, 180) if i == 0 else (75, 133, 212)
             pygame.draw.rect(self._screen, color,
                              (sx * cell_size + 2, sy * cell_size + 2,
                               cell_size - 4, cell_size - 4),
                              border_radius=8)
 
-        # ── Score bar ─────────────────────────────────────────────────────────
         bar_y = self.grid_h * cell_size
         pygame.draw.rect(self._screen, (40, 40, 40),
                          (0, bar_y, self.grid_w * cell_size, 40))
@@ -416,16 +383,15 @@ if __name__ == "__main__":
     env = SnakeEnv()
     state = env.reset()
 
-    print(f"State length : {len(state)}  (expected 11)")
+    print(f"State length : {len(state)}  (expected 12)")
     print(f"State values : {state}")
     print()
     env.print_grid()
 
-    # Play 10 random steps
     for i in range(10):
         action = random.randint(0, 3)
         state, reward, done = env.step(action)
-        print(f"Step {i+1}: action={action}  reward={reward:.3f}  done={done}")
+        print(f"Step {i+1}: action={action}  reward={reward:.3f}  done={done}  state_len={len(state)}")
         if done:
             print("Episode ended.")
             break

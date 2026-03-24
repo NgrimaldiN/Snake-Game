@@ -272,6 +272,8 @@ class SnakeEnv:
           - Not in the 3×3 corners of the board
         """
         snake_set = set(self.snake)
+        if len(self.walls) >= 17:
+            return
         apple_set = set(self.apples)
         wall_set  = set(self.walls)
         hx, hy    = self.snake[0]

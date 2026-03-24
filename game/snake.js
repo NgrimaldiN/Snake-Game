@@ -66,6 +66,9 @@ const highScoreEl = document.getElementById('high-score');
 if (highScoreEl) highScoreEl.innerText = `🏆 ${highScore}`;
 
 function spawnWall() {
+	// Max 17 walls (highest reachable score = 70)
+	if (walls.length >= 17) return;
+
 	// Deterministic spawning based on apple count (handled in update)
 	// Deterministic spawning based on apple count (handled in update)
 	// Removed random chance to strictly follow 'every other apple' rule
