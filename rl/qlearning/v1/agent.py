@@ -1,15 +1,18 @@
+###agent on 11 parameter env
+import os
+
 from snake_env import SnakeEnv, UP, DOWN, LEFT, RIGHT
 import numpy as np
 import random as rd
 import matplotlib.pyplot as plt
-
+num_episodes=100000
 eps=1.0
-eps_dec=0.9985
+eps_dec=0.01**(1/(num_episodes*0.6))
 
 a=0.1
 gamma=0.99
 
-num_episodes=5000
+
 max_steps=10000
 
 env=SnakeEnv()
@@ -61,8 +64,12 @@ def smooth(data, window=50):
 
 fig, axes = plt.subplots(2, 1, figsize=(10, 8))
 
+smoothed_scores = smooth(scores)
+convergence_val = np.mean(smoothed_scores[-int(num_episodes*0.1):])
+
 axes[0].plot(scores, alpha=0.3, color="steelblue", label="raw")
-axes[0].plot(smooth(scores), color="steelblue", linewidth=2, label="smoothed (50 ep)")
+axes[0].plot(smoothed_scores, color="steelblue", linewidth=2, label="smoothed (50 ep)")
+axes[0].axhline(y=convergence_val, color='r', linestyle='--', label=f'Convergence (~{convergence_val:.1f})')
 axes[0].set_xlabel("Episode")
 axes[0].set_ylabel("Score (apples eaten)")
 axes[0].set_title("Score per episode")
@@ -76,9 +83,10 @@ axes[1].set_title("Steps per episode")
 axes[1].legend()
 
 plt.tight_layout()
-plt.savefig("progression.png")
+save_path = os.path.join(os.path.dirname(__file__), "progression_optimized_decay.png")
+plt.savefig(save_path)
 plt.show()
-print("Plot saved to progression.png")
+print(f"Plot saved to {save_path}")
 
 # ── Watch the trained agent play ──────────────────────────────────────────────
 print("\nTraining done. Watching agent play (close the window to exit)...")

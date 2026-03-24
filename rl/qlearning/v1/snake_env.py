@@ -6,7 +6,7 @@ Usage:
     state = env.reset()
     state, reward, done = env.step(action)  # action in {0, 1, 2, 3}
 
-Grid: 17 wide x 15 tall (verify against the real game by counting tiles).
+Grid: 9 wide x 11 tall (verify against the real game by counting tiles).
 """
 
 import random

@@ -6,11 +6,12 @@ Usage:
     state = env.reset()
     state, reward, done = env.step(action)  # action in {0, 1, 2, 3}
 
-Grid: 17 wide x 15 tall (verify against the real game by counting tiles).
+Grid: 9 wide x 11 tall (verify against the real game by counting tiles).
 """
 
 import random
 import math
+import numpy as np
 
 # ── Cell types (used internally) ─────────────────────────────────────────────
 EMPTY      = 0
@@ -207,6 +208,9 @@ class SnakeEnv:
         danger_straight = 1.0 if self._is_fatal((hx + straight[0], hy + straight[1])) else 0.0
         danger_right    = 1.0 if self._is_fatal((hx + right[0],    hy + right[1]))    else 0.0
         danger_left     = 1.0 if self._is_fatal((hx + left[0],     hy + left[1]))     else 0.0
+        danger_straight_right = 1.0 if self._is_fatal((hx+straight[0]+right[0],hy+straight[1]+right[1])) else 0.0
+        danger_straight_left = 1.0 if self._is_fatal((hx+straight[0]+left[0],hy+straight[1]+left[1])) else 0.0
+
 
         # ── Current direction (one-hot) ───────────────────────────────────
         dir_up    = 1.0 if (self.dx, self.dy) == ( 0, -1) else 0.0
@@ -220,16 +224,16 @@ class SnakeEnv:
         apple_down  = 1.0 if ay > hy else 0.0
         apple_left  = 1.0 if ax < hx else 0.0
         apple_right = 1.0 if ax > hx else 0.0
-        
+
+
 
         return [
-            danger_straight, danger_right, danger_left,
+            danger_straight, danger_right, danger_left, danger_straight_right, danger_straight_left,
             dir_up, dir_down, dir_left, dir_right,
             apple_up, apple_down, apple_left, apple_right,
         ]
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
+    
     def _is_fatal(self, pos):
         """Return True if moving to pos would kill the snake."""
         x, y = pos
