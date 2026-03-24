@@ -1,14 +1,15 @@
 from snake_env import SnakeEnv, UP, DOWN, LEFT, RIGHT
 import numpy as np
 import random as rd
+import matplotlib.pyplot as plt
 
 eps=1.0
-eps_dec=0.998
+eps_dec=0.9985
 
 a=0.1
 gamma=0.99
 
-num_episodes=1000
+num_episodes=5000
 max_steps=10000
 
 env=SnakeEnv()
@@ -32,20 +33,52 @@ def choose_action(state):
     else:
         return np.argmax(q_table[state_to_index(state),:])
 
+scores    = []
+steps_log = []
+
 for episode in range(num_episodes):
     state=env.reset()
     for step in range(max_steps):
         action=choose_action(state)
         next_state,reward,done=env.step(action)
-        
+
         old_value=q_table[state_to_index(state),action]
         next_max=np.max(q_table[state_to_index(next_state),:])
         q_table[state_to_index(state),action]=(1-a)*old_value+ a*(reward + gamma*next_max)
         state=next_state
         if done:
             break
-    print(f"Episode {episode+1} | steps: {step+1} | eps: {eps:.3f}")
+
+    scores.append(env.apples_eaten)
+    steps_log.append(step + 1)
+    print(f"Episode {episode+1} | score: {env.apples_eaten} | steps: {step+1} | eps: {eps:.3f}")
     eps=max(eps*eps_dec,0.01)
+
+# ── Plot progression ──────────────────────────────────────────────────────────
+
+def smooth(data, window=50):
+    return [sum(data[max(0, i-window):i+1]) / min(i+1, window) for i in range(len(data))]
+
+fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+
+axes[0].plot(scores, alpha=0.3, color="steelblue", label="raw")
+axes[0].plot(smooth(scores), color="steelblue", linewidth=2, label="smoothed (50 ep)")
+axes[0].set_xlabel("Episode")
+axes[0].set_ylabel("Score (apples eaten)")
+axes[0].set_title("Score per episode")
+axes[0].legend()
+
+axes[1].plot(steps_log, alpha=0.3, color="orange", label="raw")
+axes[1].plot(smooth(steps_log), color="orange", linewidth=2, label="smoothed (50 ep)")
+axes[1].set_xlabel("Episode")
+axes[1].set_ylabel("Steps survived")
+axes[1].set_title("Steps per episode")
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig("progression.png")
+plt.show()
+print("Plot saved to progression.png")
 
 # ── Watch the trained agent play ──────────────────────────────────────────────
 print("\nTraining done. Watching agent play (close the window to exit)...")

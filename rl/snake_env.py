@@ -57,8 +57,10 @@ class SnakeEnv:
 
     Reward:
         +1.0   eating an apple
-        -1.0   dying
-        -0.001 every step        (discourages looping)
+        -1.0   trapped death     (all exits were fatal — unavoidable)
+        -5.0   suicide           (chose death when safe moves existed)
+        0.0    within grace steps after apple (free planning window)
+        exponential after grace steps, capped at -0.5/step
     """
 
     def __init__(self, grid_w=10, grid_h=9, n_apples=5):
@@ -68,14 +70,23 @@ class SnakeEnv:
         self.n_apples = n_apples
 
         # Set by reset()
-        self.snake        = []   # list of (x, y), index 0 = head
-        self.dx           = 0
-        self.dy           = 0
-        self.apples       = []   # list of (x, y)
-        self.walls        = []   # list of (x, y)
-        self.apples_eaten = 0
-        self.steps        = 0
-        self.done         = False
+        self.snake             = []   # list of (x, y), index 0 = head
+        self.dx                = 0
+        self.dy                = 0
+        self.apples            = []   # list of (x, y)
+        self.walls             = []   # list of (x, y)
+        self.apples_eaten      = 0
+        self.steps             = 0
+        self.steps_since_apple = 0   # resets each time an apple is eaten
+        self.done              = False
+
+        # ── Penalty schedule ──────────────────────────────────────────────────
+        # No penalty for the first `grace` steps after eating an apple.
+        # After that: penalty = pen_base * exp(pen_rate * steps_over_grace)
+        # Capped at 0.5 so death (-1.0) is always the worst outcome.
+        self.grace    = 20     # free steps after each apple
+        self.pen_base = 0.001
+        self.pen_rate = 0.05
 
         # How many steps before we force-stop an episode (prevents infinite loops)
         self.max_steps = grid_w * grid_h * 4
@@ -88,9 +99,10 @@ class SnakeEnv:
         self.dx, self.dy = 1, 0   # start moving right
         self.apples       = [(4,2), (8,2), (6,4), (4,6), (8,6)]
         self.walls        = []
-        self.apples_eaten = 0
-        self.steps        = 0
-        self.done         = False
+        self.apples_eaten      = 0
+        self.steps             = 0
+        self.steps_since_apple = 0
+        self.done              = False
 
         return self._get_state()
 
@@ -109,6 +121,9 @@ class SnakeEnv:
         assert not self.done, "Call reset() before stepping after game over."
         self.steps += 1
 
+        # Store direction before update (needed for trap detection)
+        prev_dx, prev_dy = self.dx, self.dy
+
         # Apply direction (ignore 180° reversals — same as Google Snake)
         new_dx, new_dy = DIRECTION[action]
         if not (new_dx == -self.dx and new_dy == -self.dy):
@@ -120,17 +135,31 @@ class SnakeEnv:
 
         # ── Collision checks → death ─────────────────────────────────────────
         if self._is_fatal(new_head):
+            # Count safe exits available from current head (excluding reverse)
+            safe_exits = sum(
+                1 for ddx, ddy in DIRECTION.values()
+                if not (ddx == -prev_dx and ddy == -prev_dy)   # not reverse
+                and not self._is_fatal((hx + ddx, hy + ddy))   # not fatal
+            )
+            # Trapped = no way out → accidental death → small penalty
+            # Had options but chose death → suicide → large penalty
+            if safe_exits == 0:
+                penalty = -1.0   # trapped — unavoidable
+            else:
+                penalty = -5.0   # suicide — had options
             self.done = True
-            return self._get_state(), -1.0, True
+            return self._get_state(), penalty, True
 
         # ── Move snake ───────────────────────────────────────────────────────
         self.snake.insert(0, new_head)
 
-        reward = -0.001
+        self.steps_since_apple += 1
+
         # ── Apple check ─────────────────────────────────────────────────────
         if new_head in self.apples:
             self.apples.remove(new_head)
-            self.apples_eaten += 1
+            self.apples_eaten      += 1
+            self.steps_since_apple  = 0   # reset grace counter
             reward = 1.0
 
             # Google Snake wall spawn pattern:
@@ -141,6 +170,12 @@ class SnakeEnv:
             self._spawn_apples()   # refill to n_apples
         else:
             self.snake.pop()       # no apple → remove tail
+
+            # ── Exponential step penalty ──────────────────────────────────────
+            # Free for `grace` steps, then grows exponentially.
+            # Capped at 0.5 so death (-1.0) remains the worst outcome.
+            over_grace = max(0, self.steps_since_apple - self.grace)
+            reward     = -min(self.pen_base * math.exp(self.pen_rate * over_grace), 0.5)
 
         # ── Max steps truncation ─────────────────────────────────────────────
         if self.steps >= self.max_steps:
