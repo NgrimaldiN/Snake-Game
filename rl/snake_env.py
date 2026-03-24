@@ -300,6 +300,76 @@ class SnakeEnv:
         print("+" + "-" * self.grid_w + "+")
         print(f"Score: {self.apples_eaten}  Step: {self.steps}  Walls: {len(self.walls)}")
 
+    def render(self, cell_size=60, fps=10):
+        """
+        Draw the current game state in a pygame window.
+        Call once per step. Handles its own clock.
+
+        Args:
+            cell_size : pixel size of each grid cell (default 60 matches the JS game)
+            fps       : how fast the bot plays visually
+        """
+        import pygame
+
+        # ── Init pygame on first call ─────────────────────────────────────────
+        if not hasattr(self, '_screen'):
+            pygame.init()
+            w = self.grid_w * cell_size
+            h = self.grid_h * cell_size + 40   # extra 40px for score bar
+            self._screen = pygame.display.set_mode((w, h))
+            pygame.display.set_caption("Snake RL")
+            self._clock  = pygame.time.Clock()
+            self._font   = pygame.font.SysFont("Arial", 20)
+
+        # ── Handle window close ───────────────────────────────────────────────
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                raise SystemExit
+
+        # ── Background (checkerboard) ─────────────────────────────────────────
+        for y in range(self.grid_h):
+            for x in range(self.grid_w):
+                color = (170, 215, 81) if (x + y) % 2 == 0 else (162, 209, 73)
+                pygame.draw.rect(self._screen, color,
+                                 (x * cell_size, y * cell_size, cell_size, cell_size))
+
+        # ── Walls ─────────────────────────────────────────────────────────────
+        for wx, wy in self.walls:
+            pygame.draw.rect(self._screen, (83, 138, 52),
+                             (wx * cell_size, wy * cell_size, cell_size, cell_size))
+            # inner shadow to look like the JS game's bush
+            pygame.draw.rect(self._screen, (60, 110, 35),
+                             (wx * cell_size + 6, wy * cell_size + 6,
+                              cell_size - 12, cell_size - 12))
+
+        # ── Apples ────────────────────────────────────────────────────────────
+        for ax, ay in self.apples:
+            cx = ax * cell_size + cell_size // 2
+            cy = ay * cell_size + cell_size // 2
+            pygame.draw.circle(self._screen, (220, 50, 50), (cx, cy), cell_size // 2 - 4)
+
+        # ── Snake ─────────────────────────────────────────────────────────────
+        for i, (sx, sy) in enumerate(self.snake):
+            color = (30, 90, 180) if i == 0 else (75, 133, 212)   # head darker
+            pygame.draw.rect(self._screen, color,
+                             (sx * cell_size + 2, sy * cell_size + 2,
+                              cell_size - 4, cell_size - 4),
+                             border_radius=8)
+
+        # ── Score bar ─────────────────────────────────────────────────────────
+        bar_y = self.grid_h * cell_size
+        pygame.draw.rect(self._screen, (40, 40, 40),
+                         (0, bar_y, self.grid_w * cell_size, 40))
+        text = self._font.render(
+            f"Score: {self.apples_eaten}   Steps: {self.steps}   Walls: {len(self.walls)}",
+            True, (255, 255, 255)
+        )
+        self._screen.blit(text, (10, bar_y + 10))
+
+        pygame.display.flip()
+        self._clock.tick(fps)
+
 
 # ── Smoke test ────────────────────────────────────────────────────────────────
 

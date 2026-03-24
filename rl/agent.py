@@ -47,6 +47,19 @@ for episode in range(num_episodes):
     print(f"Episode {episode+1} | steps: {step+1} | eps: {eps:.3f}")
     eps=max(eps*eps_dec,0.01)
 
+# ── Watch the trained agent play ──────────────────────────────────────────────
+print("\nTraining done. Watching agent play (close the window to exit)...")
+
+watch_env = SnakeEnv()
+state     = watch_env.reset()
+
+while True:
+    watch_env.render(fps=8)
+    action     = np.argmax(q_table[state_to_index(state), :])   # pure exploit, no random
+    state, _, done = watch_env.step(action)
+    if done:
+        state = watch_env.reset()
+
 
 
 
