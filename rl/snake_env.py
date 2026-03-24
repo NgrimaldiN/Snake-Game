@@ -84,16 +84,14 @@ class SnakeEnv:
 
     def reset(self):
         """Start a new episode. Returns the initial state vector."""
-        mid_y = self.grid_h // 2
-        self.snake = [(4, mid_y), (3, mid_y), (2, mid_y)]  # head at index 0
+        self.snake = [(2, 4), (1, 4), (0, 4)]  # head at index 0, matches JS game starting position
         self.dx, self.dy = 1, 0   # start moving right
-        self.apples       = []
+        self.apples       = [(4,2), (8,2), (6,4), (4,6), (8,6)]
         self.walls        = []
         self.apples_eaten = 0
         self.steps        = 0
         self.done         = False
 
-        self._spawn_apples()
         return self._get_state()
 
     def step(self, action):
@@ -128,8 +126,8 @@ class SnakeEnv:
         # ── Move snake ───────────────────────────────────────────────────────
         self.snake.insert(0, new_head)
 
-        # ── Apple check ─────────────────────────────────────────────────────
         reward = -0.001
+        # ── Apple check ─────────────────────────────────────────────────────
         if new_head in self.apples:
             self.apples.remove(new_head)
             self.apples_eaten += 1
