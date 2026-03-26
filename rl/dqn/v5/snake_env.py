@@ -1,25 +1,28 @@
 """
-Snake environment v4 — maximum tabular Q-learning state (22 bits).
+Snake environment v5 — raw grid state for CNN-based DQN.
 
-State (22 binary floats):
-    [0-2]   danger dist 1  (straight, right, left)
-    [3-5]   danger dist 2  (straight, right, left)
-    [6-7]   danger diag    (fwd-right, fwd-left)
-    [8-11]  direction      (up, down, left, right)
-    [12-15] apple          (up, down, left, right)
-    [16-18] flood-fill safe (straight, right, left)
-            → 1.0 if reachable space >= snake length
-    [19]    danger dist 3 straight
-    [20-21] danger rear diag (back-right, back-left)
+State: numpy array, shape (8, H, W), dtype uint8.
+    Channel 0 : snake head   (1 at head cell)
+    Channel 1 : snake body   (1 at each body cell)
+    Channel 2 : apple        (1 at each apple cell)
+    Channel 3 : wall         (1 at each wall cell)
+    Channel 4-7 : direction  (one-hot — the active direction channel is all-1s)
+
+Why 8 binary channels instead of one integer per cell?
+    Cell types are categorical (apple ≠ 2 × head).  One-hot channels let the
+    CNN treat each entity type independently — same idea as one-hot encoding
+    in any ML pipeline.  Direction is broadcast across the full grid so every
+    conv filter can "see" it regardless of receptive field.
 
 Grid: 10 wide × 9 tall.
 """
 
 import random
 import math
+import numpy as np
 from collections import deque
 
-# ── Cell types ────────────────────────────────────────────────────────────────
+# ── Cell types (for rendering only) ──────────────────────────────────────────
 EMPTY      = 0
 SNAKE_HEAD = 1
 SNAKE_BODY = 2
@@ -39,15 +42,21 @@ DIRECTION = {
     RIGHT: ( 1,  0),
 }
 
+DIR_CHANNEL = {
+    ( 0, -1): 4,   # up
+    ( 0,  1): 5,   # down
+    (-1,  0): 6,   # left
+    ( 1,  0): 7,   # right
+}
+
 
 class SnakeEnv:
     """
-    Google Snake environment v4 — 22-feature state for tabular Q-learning.
+    Google Snake environment v5 — 8-channel grid state for DQN.
 
-    New features over v3:
-      - Flood-fill spatial awareness (3 bits): detects dead ends
-      - Danger at distance 3 straight (1 bit): deeper forward vision
-      - Rear diagonal danger (2 bits): 360° awareness
+    Same game rules and reward shaping as v4 (loop detection, exponential
+    idle penalty, avoidable-death vs trapped-death distinction).
+    Only the state representation changes: raw grid → CNN input.
     """
 
     def __init__(self, grid_w=10, grid_h=9, n_apples=5):
@@ -69,11 +78,10 @@ class SnakeEnv:
         self.pen_base = 0.001
         self.pen_rate = 0.05
         self.max_steps = grid_w * grid_h * 4
-        # Penalties for terminal mistakes (match each other so "avoidable suicide" ≈ "looping")
-        self.penalty_trap_death = -1.0   # collision when no safe exit existed
-        self.penalty_avoidable_death = -5.0  # collision when a safe turn existed
-        self.penalty_loop = self.penalty_avoidable_death  # same as avoidable suicide
-        # Per-cell head visits since last apple: allow 1 revisit (one loop), penalize 3rd visit
+
+        self.penalty_trap_death     = -1.0
+        self.penalty_avoidable_death = -5.0
+        self.penalty_loop           = self.penalty_avoidable_death
         self.loop_max_visits_per_cell = 2
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -81,13 +89,12 @@ class SnakeEnv:
     def reset(self):
         self.snake = [(2, 4), (1, 4), (0, 4)]
         self.dx, self.dy = 1, 0
-        self.apples       = [(4,2), (8,2), (6,4), (4,6), (8,6)]
+        self.apples       = [(4, 2), (8, 2), (6, 4), (4, 6), (8, 6)]
         self.walls        = []
         self.apples_eaten      = 0
         self.steps             = 0
         self.steps_since_apple = 0
         self.done              = False
-        # Count how many times the head has landed on each cell since last apple
         self._head_visit_count_since_apple = {self.snake[0]: 1}
         return self._get_state()
 
@@ -104,6 +111,7 @@ class SnakeEnv:
         hx, hy = self.snake[0]
         new_head = (hx + self.dx, hy + self.dy)
 
+        # ── Collision death ───────────────────────────────────────────────
         if self._is_fatal(new_head):
             safe_exits = sum(
                 1 for ddx, ddy in DIRECTION.values()
@@ -114,13 +122,13 @@ class SnakeEnv:
             self.done = True
             return self._get_state(), penalty, True
 
-        # Loop: penalize when the head enters a cell for the (max_visits+1)-th time — allows one full
-        # revisit per cell (one loop to progress) before counting as wasteful looping.
+        # ── Loop death (3rd visit to same cell since last apple) ──────────
         prev_visits = self._head_visit_count_since_apple.get(new_head, 0)
         if prev_visits >= self.loop_max_visits_per_cell:
             self.done = True
             return self._get_state(), self.penalty_loop, True
 
+        # ── Move ──────────────────────────────────────────────────────────
         self.snake.insert(0, new_head)
         self.steps_since_apple += 1
 
@@ -145,75 +153,26 @@ class SnakeEnv:
 
         return self._get_state(), reward, False
 
-    # ── State representation (22 bits) ────────────────────────────────────────
+    # ── State representation (8-channel grid) ─────────────────────────────────
 
     def _get_state(self):
+        state = np.zeros((8, self.grid_h, self.grid_w), dtype=np.uint8)
+
         hx, hy = self.snake[0]
+        state[0, hy, hx] = 1
 
-        straight = (self.dx,       self.dy)
-        right    = (-self.dy,      self.dx)
-        left     = ( self.dy,     -self.dx)
-        back     = (-self.dx,     -self.dy)
+        for sx, sy in self.snake[1:]:
+            state[1, sy, sx] = 1
 
-        # ── Danger dist 1 ────────────────────────────────────────────────
-        danger_s1 = 1.0 if self._is_fatal((hx + straight[0], hy + straight[1])) else 0.0
-        danger_r1 = 1.0 if self._is_fatal((hx + right[0],    hy + right[1]))    else 0.0
-        danger_l1 = 1.0 if self._is_fatal((hx + left[0],     hy + left[1]))     else 0.0
+        for ax, ay in self.apples:
+            state[2, ay, ax] = 1
 
-        # ── Danger dist 2 ────────────────────────────────────────────────
-        danger_s2 = 1.0 if self._is_fatal((hx + 2*straight[0], hy + 2*straight[1])) else 0.0
-        danger_r2 = 1.0 if self._is_fatal((hx + 2*right[0],    hy + 2*right[1]))    else 0.0
-        danger_l2 = 1.0 if self._is_fatal((hx + 2*left[0],     hy + 2*left[1]))     else 0.0
+        for wx, wy in self.walls:
+            state[3, wy, wx] = 1
 
-        # ── Diagonal danger (forward) ────────────────────────────────────
-        danger_diag_r = 1.0 if self._is_fatal((hx + straight[0] + right[0],
-                                                hy + straight[1] + right[1])) else 0.0
-        danger_diag_l = 1.0 if self._is_fatal((hx + straight[0] + left[0],
-                                                hy + straight[1] + left[1]))  else 0.0
+        state[DIR_CHANNEL[(self.dx, self.dy)]] = 1
 
-        # ── Direction one-hot ────────────────────────────────────────────
-        dir_up    = 1.0 if (self.dx, self.dy) == ( 0, -1) else 0.0
-        dir_down  = 1.0 if (self.dx, self.dy) == ( 0,  1) else 0.0
-        dir_left  = 1.0 if (self.dx, self.dy) == (-1,  0) else 0.0
-        dir_right = 1.0 if (self.dx, self.dy) == ( 1,  0) else 0.0
-
-        # ── Apple direction (absolute) ───────────────────────────────────
-        ax, ay = self._nearest_apple()
-        apple_up    = 1.0 if ay < hy else 0.0
-        apple_down  = 1.0 if ay > hy else 0.0
-        apple_left  = 1.0 if ax < hx else 0.0
-        apple_right = 1.0 if ax > hx else 0.0
-
-        # ── Flood-fill safety (NEW) ──────────────────────────────────────
-        # 1.0 if going that direction leads to enough space for the snake
-        snake_len = len(self.snake)
-        pos_s = (hx + straight[0], hy + straight[1])
-        pos_r = (hx + right[0],    hy + right[1])
-        pos_l = (hx + left[0],     hy + left[1])
-
-        space_s = 1.0 if self._flood_count(pos_s) >= snake_len else 0.0
-        space_r = 1.0 if self._flood_count(pos_r) >= snake_len else 0.0
-        space_l = 1.0 if self._flood_count(pos_l) >= snake_len else 0.0
-
-        # ── Danger dist 3 straight (NEW) ─────────────────────────────────
-        danger_s3 = 1.0 if self._is_fatal((hx + 3*straight[0], hy + 3*straight[1])) else 0.0
-
-        # ── Rear diagonal danger (NEW) ───────────────────────────────────
-        danger_back_r = 1.0 if self._is_fatal((hx + back[0] + right[0],
-                                                hy + back[1] + right[1])) else 0.0
-        danger_back_l = 1.0 if self._is_fatal((hx + back[0] + left[0],
-                                                hy + back[1] + left[1]))  else 0.0
-
-        return [
-            danger_s1, danger_r1, danger_l1,           # 0-2
-            danger_s2, danger_r2, danger_l2,           # 3-5
-            danger_diag_r, danger_diag_l,              # 6-7
-            dir_up, dir_down, dir_left, dir_right,     # 8-11
-            apple_up, apple_down, apple_left, apple_right,  # 12-15
-            space_s, space_r, space_l,                 # 16-18
-            danger_s3,                                 # 19
-            danger_back_r, danger_back_l,              # 20-21
-        ]
+        return state
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -226,37 +185,6 @@ class SnakeEnv:
         if pos in self.snake:
             return True
         return False
-
-    def _flood_count(self, start):
-        """
-        BFS flood fill from start position.
-        Returns number of reachable cells.
-        Early-terminates once count >= snake length (enough space = safe).
-        """
-        if self._is_fatal(start):
-            return 0
-        snake_set = set(self.snake)
-        wall_set  = set(self.walls)
-        target    = len(self.snake)
-        visited   = {start}
-        queue     = deque([start])
-        while queue:
-            if len(visited) >= target:
-                return len(visited)    # early exit: enough space
-            x, y = queue.popleft()
-            for ddx, ddy in ((0,1),(0,-1),(1,0),(-1,0)):
-                nx, ny = x + ddx, y + ddy
-                if (nx, ny) not in visited and 0 <= nx < self.grid_w and 0 <= ny < self.grid_h:
-                    if (nx, ny) not in snake_set and (nx, ny) not in wall_set:
-                        visited.add((nx, ny))
-                        queue.append((nx, ny))
-        return len(visited)
-
-    def _nearest_apple(self):
-        if not self.apples:
-            return (self.grid_w // 2, self.grid_h // 2)
-        hx, hy = self.snake[0]
-        return min(self.apples, key=lambda a: abs(a[0] - hx) + abs(a[1] - hy))
 
     def _spawn_apples(self):
         occupied = set(self.snake) | set(self.walls) | set(self.apples)
@@ -284,13 +212,14 @@ class SnakeEnv:
                 continue
             if abs(x - hx) + abs(y - hy) <= 3:
                 continue
-            corners = [(0,0),(self.grid_w-1,0),(0,self.grid_h-1),(self.grid_w-1,self.grid_h-1)]
-            if any(abs(x-cx)<=1 and abs(y-cy)<=1 for cx,cy in corners):
+            corners = [(0, 0), (self.grid_w - 1, 0), (0, self.grid_h - 1),
+                       (self.grid_w - 1, self.grid_h - 1)]
+            if any(abs(x - cx) <= 1 and abs(y - cy) <= 1 for cx, cy in corners):
                 continue
             self.walls.append((x, y))
             break
 
-    # ── Utility ───────────────────────────────────────────────────────────────
+    # ── Rendering ─────────────────────────────────────────────────────────────
 
     def get_grid(self):
         grid = [[EMPTY] * self.grid_w for _ in range(self.grid_h)]
@@ -311,16 +240,16 @@ class SnakeEnv:
         print("+" + "-" * self.grid_w + "+")
         print(f"Score: {self.apples_eaten}  Step: {self.steps}  Walls: {len(self.walls)}")
 
-    def render(self, cell_size=60, fps=10):
+    def render(self, cell_size=60, fps=10, title=None):
         import pygame
         if not hasattr(self, '_screen'):
             pygame.init()
             w = self.grid_w * cell_size
             h = self.grid_h * cell_size + 40
             self._screen = pygame.display.set_mode((w, h))
-            pygame.display.set_caption("Snake RL v4")
             self._clock  = pygame.time.Clock()
             self._font   = pygame.font.SysFont("Arial", 20)
+        pygame.display.set_caption(title or "Snake DQN v5")
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -360,14 +289,14 @@ class SnakeEnv:
 if __name__ == "__main__":
     env = SnakeEnv()
     state = env.reset()
-    print(f"State length : {len(state)}  (expected 22)")
-    print(f"State values : {state}")
+    print(f"State shape: {state.shape}  dtype: {state.dtype}  (expected (8, 9, 10) uint8)")
+    print(f"Channels with any 1s: {[i for i in range(8) if state[i].any()]}")
     env.print_grid()
 
     for i in range(10):
         action = random.randint(0, 3)
         state, reward, done = env.step(action)
-        print(f"Step {i+1}: action={action}  reward={reward:.3f}  done={done}")
+        print(f"Step {i+1}: action={action}  reward={reward:.3f}  done={done}  shape={state.shape}")
         if done:
             print("Episode ended.")
             break
