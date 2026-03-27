@@ -193,7 +193,7 @@ def main():
               f"best avg50: {ckpt.get('best_avg50', '?')}, device: {device}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=False, channel="chrome")
         page = browser.new_page()
 
         page.route("**/*.js", _make_route_handler())

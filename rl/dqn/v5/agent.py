@@ -289,7 +289,8 @@ for episode in range(start_episode, EPISODES):
 
     if (episode + 1) % 500 == 0:
         avg = np.mean(scores[-50:])
-        print(f"Ep {episode+1:>6} | score {env.apples_eaten:>3} | avg50 {avg:.1f} | "
+        best_in_batch = max(scores[-500:])
+        print(f"Ep {episode+1:>6} | best500 {best_in_batch:>3} | avg50 {avg:.1f} | "
               f"steps {step:>4} | eps {epsilon:.3f} | loss {np.mean(loss_log[-50:]):.4f} | "
               f"buf {len(buffer):,}")
 
