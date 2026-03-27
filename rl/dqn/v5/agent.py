@@ -25,15 +25,15 @@ from snake_env import SnakeEnv
 RESUME = "--resume" in sys.argv
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
-EPISODES        = 100_000
-BATCH_SIZE      = 64
+EPISODES        = 250_000
+BATCH_SIZE      = 128
 GAMMA           = 0.99
 LR              = 1e-4
-BUFFER_CAPACITY = 50_000
+BUFFER_CAPACITY = 100_000
 TARGET_UPDATE   = 1_000        # sync target net every N global steps
 EPS_START       = 1.0
 EPS_END         = 0.01
-EPS_DECAY_UNTIL = int(EPISODES * 0.7)   # linear decay over 70% of training
+EPS_DECAY_UNTIL = 70_000       # fixed: eps already at min, don't restart decay
 
 CHECKPOINT_EVERY = 5_000
 BEST_WINDOW      = 50
@@ -205,9 +205,10 @@ def optimise():
     # Q_policy(s, a) — predicted Q for the action we actually took
     q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
-    # Target: r + γ · max_a' Q_target(s', a')   (0 if terminal)
+    # Double DQN target: policy net picks the best action, target net rates it
     with torch.no_grad():
-        next_q  = target_net(next_states).max(dim=1)[0]
+        best_actions = policy_net(next_states).argmax(dim=1)
+        next_q = target_net(next_states).gather(1, best_actions.unsqueeze(1)).squeeze(1)
         targets = rewards + GAMMA * next_q * (1.0 - dones)
 
     loss = F.smooth_l1_loss(q_values, targets)   # Huber loss — less sensitive to outliers
