@@ -288,11 +288,18 @@ for episode in range(start_episode, EPISODES):
     loss_log.append(ep_loss / max(step, 1))
 
     if (episode + 1) % 500 == 0:
-        avg = np.mean(scores[-50:])
-        best_in_batch = max(scores[-500:])
-        print(f"Ep {episode+1:>6} | best500 {best_in_batch:>3} | avg50 {avg:.1f} | "
-              f"steps {step:>4} | eps {epsilon:.3f} | loss {np.mean(loss_log[-50:]):.4f} | "
-              f"buf {len(buffer):,}")
+        batch_scores = scores[-500:]
+        batch_steps  = steps_log[-500:]
+        batch_loss   = loss_log[-500:]
+        best_idx = int(np.argmax(batch_scores))
+        best_in_batch = batch_scores[best_idx]
+        best_steps    = batch_steps[best_idx]
+        avg_sc  = float(np.mean(batch_scores))
+        avg_stp = int(np.mean(batch_steps))
+        avg_loss = float(np.mean(batch_loss))
+        print(f"Ep {episode+1:>6} | best500 {best_in_batch:>3} ({best_steps} stp) | "
+              f"avg_sc {avg_sc:.1f} | avg_stp {avg_stp:>4} | eps {epsilon:.3f} | "
+              f"loss {avg_loss:.4f} | buf {len(buffer):,}")
 
     if ENABLE_TRAINING_DEMOS and (episode + 1) in DEMO_AT:
         print(f"  >>> Demo at episode {episode+1:,} ...")
