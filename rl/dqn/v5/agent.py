@@ -28,9 +28,9 @@ RESUME = "--resume" in sys.argv
 EPISODES        = 250_000
 BATCH_SIZE      = 128
 GAMMA           = 0.99
-LR              = 1e-4
+LR              = 5e-5          # halved: stabilise near-optimal policy
 BUFFER_CAPACITY = 100_000
-TARGET_UPDATE   = 1_000        # sync target net every N global steps
+TAU             = 0.005         # soft target update: blend 0.5% per train step
 EPS_START       = 1.0
 EPS_END         = 0.01
 EPS_DECAY_UNTIL = 70_000       # fixed: eps already at min, don't restart decay
@@ -135,7 +135,7 @@ base_dir    = os.path.dirname(__file__)
 # Policy network — the one we actually train
 policy_net = DQN(state_shape[0], state_shape[1], state_shape[2], n_actions).to(device)
 
-# Target network — frozen copy, updated every TARGET_UPDATE steps
+# Target network — soft-updated every step via Polyak averaging (TAU)
 target_net = DQN(state_shape[0], state_shape[1], state_shape[2], n_actions).to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()                       # never call .train() on this
@@ -279,9 +279,8 @@ for episode in range(start_episode, EPISODES):
 
         if len(buffer) >= BATCH_SIZE:
             ep_loss += optimise()
-
-        if total_steps % TARGET_UPDATE == 0:
-            target_net.load_state_dict(policy_net.state_dict())
+            for tp, pp in zip(target_net.parameters(), policy_net.parameters()):
+                tp.data.mul_(1 - TAU).add_(pp.data, alpha=TAU)
 
     scores.append(env.apples_eaten)
     steps_log.append(step)
