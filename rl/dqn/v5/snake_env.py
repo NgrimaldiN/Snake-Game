@@ -77,7 +77,7 @@ class SnakeEnv:
         self.grace    = 20
         self.pen_base = 0.001
         self.pen_rate = 0.05
-        self.max_steps = grid_w * grid_h * 4
+        self.max_steps = 2000
 
         self.penalty_trap_death     = -1.0
         self.penalty_avoidable_death = -5.0

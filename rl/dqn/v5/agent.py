@@ -9,6 +9,7 @@ DQN Agent v5 — CNN on raw 8-channel grid state.
 """
 
 import os
+import sys
 import random
 import math
 import numpy as np
@@ -21,6 +22,8 @@ import torch.optim as optim
 
 from snake_env import SnakeEnv
 
+RESUME = "--resume" in sys.argv
+
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 EPISODES        = 100_000
 BATCH_SIZE      = 64
@@ -31,6 +34,10 @@ TARGET_UPDATE   = 1_000        # sync target net every N global steps
 EPS_START       = 1.0
 EPS_END         = 0.01
 EPS_DECAY_UNTIL = int(EPISODES * 0.7)   # linear decay over 70% of training
+
+CHECKPOINT_EVERY = 5_000
+BEST_WINDOW      = 50
+ENABLE_TRAINING_DEMOS = False
 
 device = torch.device(
     "cuda" if torch.cuda.is_available()
@@ -123,6 +130,7 @@ class DQN(nn.Module):
 env         = SnakeEnv()
 n_actions   = 4
 state_shape = env.reset().shape        # (8, 9, 10)
+base_dir    = os.path.dirname(__file__)
 
 # Policy network — the one we actually train
 policy_net = DQN(state_shape[0], state_shape[1], state_shape[2], n_actions).to(device)
@@ -137,6 +145,38 @@ buffer    = ReplayBuffer(BUFFER_CAPACITY, state_shape)
 
 param_count = sum(p.numel() for p in policy_net.parameters())
 print(f"Network: {state_shape} -> {n_actions} actions  ({param_count:,} parameters)")
+
+checkpoints_dir = os.path.join(base_dir, "checkpoints")
+os.makedirs(checkpoints_dir, exist_ok=True)
+
+start_episode = 0
+resumed_scores = []
+
+if RESUME:
+    ckpt_path = os.path.join(checkpoints_dir, "best_model.pt")
+    if not os.path.exists(ckpt_path):
+        sys.exit(f"No checkpoint found at {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    policy_net.load_state_dict(ckpt["policy_state_dict"])
+    target_net.load_state_dict(ckpt["target_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    start_episode = ckpt["episode"]
+    resumed_scores = ckpt.get("scores", [])
+    print(f"Resumed from episode {start_episode:,}  (best avg50: {ckpt['best_avg50']:.1f})")
+
+def save_checkpoint(path, episode, best_avg50):
+    torch.save(
+        {
+            "episode": episode,
+            "policy_state_dict": policy_net.state_dict(),
+            "target_state_dict": target_net.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_avg50": best_avg50,
+            "total_steps": total_steps,
+            "scores": scores,
+        },
+        path,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -212,12 +252,13 @@ def play_demo(episode_num):
 # 7. TRAINING LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
 
-scores      = []
+scores      = resumed_scores
 steps_log   = []
 loss_log    = []
 total_steps = 0
+best_avg50  = float("-inf")
 
-for episode in range(EPISODES):
+for episode in range(start_episode, EPISODES):
     state = env.reset()
     done  = False
     step  = 0
@@ -251,11 +292,25 @@ for episode in range(EPISODES):
               f"steps {step:>4} | eps {epsilon:.3f} | loss {np.mean(loss_log[-50:]):.4f} | "
               f"buf {len(buffer):,}")
 
-    if (episode + 1) in DEMO_AT:
+    if ENABLE_TRAINING_DEMOS and (episode + 1) in DEMO_AT:
         print(f"  >>> Demo at episode {episode+1:,} ...")
         play_demo(episode + 1)
 
+    if len(scores) >= BEST_WINDOW:
+        avg50 = float(np.mean(scores[-BEST_WINDOW:]))
+        if avg50 > best_avg50:
+            best_avg50 = avg50
+            best_path = os.path.join(checkpoints_dir, "best_model.pt")
+            save_checkpoint(best_path, episode + 1, best_avg50)
+
+    if (episode + 1) % CHECKPOINT_EVERY == 0:
+        ckpt_path = os.path.join(checkpoints_dir, f"checkpoint_ep_{episode+1:06d}.pt")
+        save_checkpoint(ckpt_path, episode + 1, best_avg50)
+
 print(f"\nDone. Total steps: {total_steps:,}")
+last_path = os.path.join(checkpoints_dir, "last_model.pt")
+save_checkpoint(last_path, EPISODES, best_avg50)
+print(f"Saved final checkpoint to {last_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -291,7 +346,7 @@ axes[2].set_ylabel("Avg loss")
 axes[2].set_title("Training loss (smoothed 500 ep)")
 
 plt.tight_layout()
-save_path = os.path.join(os.path.dirname(__file__), "progression.png")
+save_path = os.path.join(base_dir, "progression.png")
 plt.savefig(save_path)
 plt.show()
 print(f"Plot saved to {save_path}")

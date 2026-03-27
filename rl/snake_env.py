@@ -89,7 +89,7 @@ class SnakeEnv:
         self.pen_rate = 0.05
 
         # How many steps before we force-stop an episode (prevents infinite loops)
-        self.max_steps = grid_w * grid_h * 4
+        self.max_steps = 2000
 
     # ── Public API ────────────────────────────────────────────────────────────
 
