@@ -88,11 +88,23 @@ JS_READ_STATE = """
     if (head.x % 1 !== 0 || head.y % 1 !== 0)
         return {status: "animating"};
 
+    // g.Da is the wall/obstacle manager (JVD class).
+    // g.Da.Ca is a Map of wall objects keyed by position hash.
+    // A wall is active/lethal when w.Ej && (w.ez === undefined || w.ez.qea > 0)
+    // — this mirrors the game's own TUD() collision check.
+    const walls = [];
+    if (g.Da && g.Da.Ca) {
+        for (const w of g.Da.Ca.values()) {
+            if (w.Ej && (w.ez === undefined || w.ez.qea > 0))
+                walls.push([Math.round(w.pos.x), Math.round(w.pos.y)]);
+        }
+    }
+
     return {
         status:    "alive",
         snake:     g.Aa.oa.map(p => [Math.round(p.x), Math.round(p.y)]),
         apples:    g.Ba.oa.map(f => [Math.round(f.pos.x), Math.round(f.pos.y)]),
-        walls:     [],
+        walls:     walls,
         gridW:     g.oa.Aa.width,
         gridH:     g.oa.Aa.height,
         direction: dir,
@@ -121,6 +133,10 @@ def build_state(data):
     for ax, ay in data["apples"]:
         if 0 <= ay < gh and 0 <= ax < gw:
             state[2, ay, ax] = 1
+
+    for wx, wy in data.get("walls", []):
+        if 0 <= wy < gh and 0 <= wx < gw:
+            state[3, wy, wx] = 1
 
     dx, dy = DIR_FROM_STR.get(data["direction"], (1, 0))
     state[DIR_CHANNEL[(dx, dy)]] = 1
@@ -225,6 +241,7 @@ def main():
             print(f"\n  Grid: {gw} x {gh}  (expected {GRID_W} x {GRID_H})")
             print(f"  Snake length: {len(result['snake'])}")
             print(f"  Apples: {len(result['apples'])}")
+            print(f"  Walls: {len(result.get('walls', []))}")
             print(f"  Direction: {result['direction']}")
             print(f"  Score: {result.get('score', '?')}")
 
