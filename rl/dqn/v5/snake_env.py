@@ -96,6 +96,7 @@ class SnakeEnv:
         self.steps_since_apple = 0
         self.done              = False
         self._head_visit_count_since_apple = {self.snake[0]: 1}
+        self._init_wall_block_grid()
         return self._get_state()
 
     def step(self, action):
@@ -188,36 +189,87 @@ class SnakeEnv:
 
     def _spawn_apples(self):
         occupied = set(self.snake) | set(self.walls) | set(self.apples)
-        attempts = 0
-        while len(self.apples) < self.n_apples and attempts < 200:
-            attempts += 1
-            candidate = (random.randint(0, self.grid_w - 1), random.randint(0, self.grid_h - 1))
-            if candidate not in occupied:
-                self.apples.append(candidate)
-                occupied.add(candidate)
+        while len(self.apples) < self.n_apples:
+            candidates = [
+                (x, y)
+                for x in range(self.grid_w)
+                for y in range(self.grid_h)
+                if (x, y) not in occupied
+            ]
+            if not candidates:
+                break
+            pos = random.choice(candidates)
+            self.apples.append(pos)
+            occupied.add(pos)
+
+    def _init_wall_block_grid(self):
+        """Initialize the blocking grid matching Google Snake's JVD.reset().
+
+        Pre-blocks 8 corner-adjacent cells on the edges — corners themselves
+        remain valid for wall placement.
+        """
+        W, H = self.grid_w, self.grid_h
+        self._wblock = [[0] * W for _ in range(H)]
+        preblocked = [
+            (0, 1), (0, H - 2),
+            (W - 1, 1), (W - 1, H - 2),
+            (1, 0), (W - 2, 0),
+            (1, H - 1), (W - 2, H - 1),
+        ]
+        for bx, by in preblocked:
+            self._wblock[by][bx] = 1
+
+    def _place_wall_block(self, x, y):
+        """Mark a wall in the blocking grid: block 8 neighbors + edge extras."""
+        W, H = self.grid_w, self.grid_h
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < W and 0 <= ny < H:
+                    self._wblock[ny][nx] += 1
+
+        if x == 0 or x == W - 1:
+            if y - 2 >= 0:
+                self._wblock[y - 2][x] += 1
+            if y + 2 <= H - 1:
+                self._wblock[y + 2][x] += 1
+        if y == 0 or y == H - 1:
+            if x - 2 >= 0:
+                self._wblock[y][x - 2] += 1
+            if x + 2 <= W - 1:
+                self._wblock[y][x + 2] += 1
+
+        cx_pairs = [
+            (0, 2, 2, 0), (W - 3, 0, W - 1, 2),
+            (0, H - 3, 2, H - 1), (W - 3, H - 1, W - 1, H - 3),
+        ]
+        for ax, ay, bx_, by_ in cx_pairs:
+            if (x == ax and y == ay) or (x == bx_ and y == by_):
+                self._wblock[ay][ax] += 1
+                self._wblock[by_][bx_] += 1
 
     def _spawn_wall(self):
         if len(self.walls) >= 17:
             return
+        hx, hy = self.snake[0]
         snake_set = set(self.snake)
         apple_set = set(self.apples)
-        wall_set  = set(self.walls)
-        hx, hy    = self.snake[0]
-        for _ in range(100):
-            x = random.randint(0, self.grid_w - 1)
-            y = random.randint(0, self.grid_h - 1)
-            if (x, y) in snake_set or (x, y) in apple_set:
-                continue
-            if any(abs(wx - x) <= 1 and abs(wy - y) <= 1 for wx, wy in wall_set):
-                continue
-            if abs(x - hx) + abs(y - hy) <= 3:
-                continue
-            corners = [(0, 0), (self.grid_w - 1, 0), (0, self.grid_h - 1),
-                       (self.grid_w - 1, self.grid_h - 1)]
-            if any(abs(x - cx) <= 1 and abs(y - cy) <= 1 for cx, cy in corners):
-                continue
-            self.walls.append((x, y))
-            break
+
+        candidates = []
+        for x in range(self.grid_w):
+            for y in range(self.grid_h):
+                if self._wblock[y][x] > 0:
+                    continue
+                if (x, y) in snake_set or (x, y) in apple_set:
+                    continue
+                if abs(x - hx) + abs(y - hy) <= 3:
+                    continue
+                candidates.append((x, y))
+
+        if candidates:
+            pos = random.choice(candidates)
+            self.walls.append(pos)
+            self._place_wall_block(pos[0], pos[1])
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
