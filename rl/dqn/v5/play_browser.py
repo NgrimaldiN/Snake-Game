@@ -7,12 +7,14 @@ route interception) instead of pixel parsing — gives perfect state accuracy.
 Usage:
     python3 play_browser.py                    # play with best_model.pt
     python3 play_browser.py --calibrate        # print grid from game internals
+    python3 play_browser.py --collect          # play + record spawn events to JSON
     python3 play_browser.py checkpoints/X.pt   # use a specific checkpoint
 """
 
 import os
 import sys
 import re
+import json
 import math
 import time
 import numpy as np
@@ -167,6 +169,7 @@ class DQN(nn.Module):
 
 def main():
     calibrate_only = "--calibrate" in sys.argv
+    collect_mode   = "--collect" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
 
     base_dir = os.path.dirname(__file__)
@@ -281,15 +284,36 @@ def main():
         games = 0
         last_ticks = -1
 
+        # ── Data collection state ────────────────────────────────────
+        spawn_log = []
+        prev_walls = set()
+        prev_apples = set()
+        prev_score = 0
+        prev_snake_len = 3
+
         def restart_game():
-            nonlocal games, last_ticks
+            nonlocal games, last_ticks, prev_walls, prev_apples, prev_score, prev_snake_len
             games += 1
             print(f"  Game over (game #{games}) — restarting...")
             time.sleep(0.8)
             page.keyboard.press("Enter")
             time.sleep(0.6)
             page.keyboard.press("Enter")
+            time.sleep(0.6)
+            page.keyboard.press("ArrowRight")
             last_ticks = -1
+            prev_walls = set()
+            prev_apples = set()
+            prev_score = 0
+            prev_snake_len = 3
+
+        def save_log():
+            if not collect_mode or not spawn_log:
+                return
+            out_path = os.path.join(base_dir, "spawn_data.json")
+            with open(out_path, "w") as f:
+                json.dump(spawn_log, f, indent=2)
+            print(f"  Saved {len(spawn_log)} spawn events -> {out_path}")
 
         try:
             while True:
@@ -301,6 +325,8 @@ def main():
                     continue
 
                 if status == "dead":
+                    if collect_mode:
+                        save_log()
                     restart_game()
                     continue
 
@@ -317,6 +343,55 @@ def main():
                     time.sleep(0.01)
                     continue
                 last_ticks = game_ticks
+
+                # ── Track spawn events ───────────────────────────────
+                if collect_mode:
+                    cur_walls  = set(map(tuple, result.get("walls", [])))
+                    cur_apples = set(map(tuple, result["apples"]))
+                    cur_score  = result.get("score", 0)
+                    cur_snake  = result["snake"]
+                    head       = cur_snake[0]
+
+                    new_walls   = cur_walls - prev_walls
+                    gone_apples = prev_apples - cur_apples
+                    new_apples  = cur_apples - prev_apples
+
+                    if new_walls:
+                        for w in new_walls:
+                            spawn_log.append({
+                                "type": "wall",
+                                "game": games + 1,
+                                "score": cur_score,
+                                "pos": list(w),
+                                "head": list(head),
+                                "snake_len": len(cur_snake),
+                                "all_walls": sorted(map(list, cur_walls)),
+                                "all_apples": sorted(map(list, cur_apples)),
+                                "snake": [list(s) for s in cur_snake],
+                            })
+                        print(f"    [collect] +{len(new_walls)} wall(s) at score {cur_score}: "
+                              f"{[list(w) for w in new_walls]}")
+
+                    if new_apples and gone_apples:
+                        for a in new_apples:
+                            spawn_log.append({
+                                "type": "apple",
+                                "game": games + 1,
+                                "score": cur_score,
+                                "pos": list(a),
+                                "eaten": sorted(map(list, gone_apples)),
+                                "head": list(head),
+                                "snake_len": len(cur_snake),
+                                "all_walls": sorted(map(list, cur_walls)),
+                                "all_apples": sorted(map(list, cur_apples)),
+                                "snake": [list(s) for s in cur_snake],
+                            })
+                        print(f"    [collect] +{len(new_apples)} apple(s) at score {cur_score}")
+
+                    prev_walls = cur_walls
+                    prev_apples = cur_apples
+                    prev_score = cur_score
+                    prev_snake_len = len(cur_snake)
 
                 state = build_state(result)
 
@@ -336,6 +411,8 @@ def main():
                 time.sleep(0.05)
 
         except KeyboardInterrupt:
+            if collect_mode:
+                save_log()
             print(f"\nStopped after {tick} ticks, {games} restarts.")
         finally:
             browser.close()
