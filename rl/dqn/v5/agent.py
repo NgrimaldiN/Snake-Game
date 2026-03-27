@@ -31,6 +31,7 @@ GAMMA           = 0.99
 LR              = 5e-5          # halved: stabilise near-optimal policy
 BUFFER_CAPACITY = 100_000
 TAU             = 0.005         # soft target update: blend 0.5% per train step
+TRAIN_EVERY     = 4             # train once every 4 env steps (like Atari DQN)
 EPS_START       = 1.0
 EPS_END         = 0.01
 EPS_DECAY_UNTIL = 70_000       # fixed: eps already at min, don't restart decay
@@ -277,7 +278,7 @@ for episode in range(start_episode, EPISODES):
         step += 1
         total_steps += 1
 
-        if len(buffer) >= BATCH_SIZE:
+        if total_steps % TRAIN_EVERY == 0 and len(buffer) >= BATCH_SIZE:
             ep_loss += optimise()
             for tp, pp in zip(target_net.parameters(), policy_net.parameters()):
                 tp.data.mul_(1 - TAU).add_(pp.data, alpha=TAU)

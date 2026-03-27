@@ -91,6 +91,9 @@ class SnakeEnv:
         self.dx, self.dy = 1, 0
         self.apples       = [(4, 2), (8, 2), (6, 4), (4, 6), (8, 6)]
         self.walls        = []
+        self._snake_set   = set(self.snake)
+        self._wall_set    = set()
+        self._apple_set   = set(self.apples)
         self.apples_eaten      = 0
         self.steps             = 0
         self.steps_since_apple = 0
@@ -131,10 +134,12 @@ class SnakeEnv:
 
         # ── Move ──────────────────────────────────────────────────────────
         self.snake.insert(0, new_head)
+        self._snake_set.add(new_head)
         self.steps_since_apple += 1
 
-        if new_head in self.apples:
+        if new_head in self._apple_set:
             self.apples.remove(new_head)
+            self._apple_set.discard(new_head)
             self.apples_eaten     += 1
             self.steps_since_apple = 0
             reward = 1.0
@@ -143,7 +148,8 @@ class SnakeEnv:
                 self._spawn_wall()
             self._spawn_apples()
         else:
-            self.snake.pop()
+            tail = self.snake.pop()
+            self._snake_set.discard(tail)
             self._head_visit_count_since_apple[new_head] = prev_visits + 1
             over_grace = max(0, self.steps_since_apple - self.grace)
             reward = -min(self.pen_base * math.exp(self.pen_rate * over_grace), 0.5)
@@ -181,14 +187,14 @@ class SnakeEnv:
         x, y = pos
         if x < 0 or x >= self.grid_w or y < 0 or y >= self.grid_h:
             return True
-        if pos in self.walls:
+        if pos in self._wall_set:
             return True
-        if pos in self.snake:
+        if pos in self._snake_set:
             return True
         return False
 
     def _spawn_apples(self):
-        occupied = set(self.snake) | set(self.walls) | set(self.apples)
+        occupied = self._snake_set | self._wall_set | self._apple_set
         while len(self.apples) < self.n_apples:
             candidates = [
                 (x, y)
@@ -200,6 +206,7 @@ class SnakeEnv:
                 break
             pos = random.choice(candidates)
             self.apples.append(pos)
+            self._apple_set.add(pos)
             occupied.add(pos)
 
     def _init_wall_block_grid(self):
@@ -252,15 +259,13 @@ class SnakeEnv:
         if len(self.walls) >= 17:
             return
         hx, hy = self.snake[0]
-        snake_set = set(self.snake)
-        apple_set = set(self.apples)
 
         candidates = []
         for x in range(self.grid_w):
             for y in range(self.grid_h):
                 if self._wblock[y][x] > 0:
                     continue
-                if (x, y) in snake_set or (x, y) in apple_set:
+                if (x, y) in self._snake_set or (x, y) in self._apple_set:
                     continue
                 if abs(x - hx) + abs(y - hy) <= 3:
                     continue
@@ -269,6 +274,7 @@ class SnakeEnv:
         if candidates:
             pos = random.choice(candidates)
             self.walls.append(pos)
+            self._wall_set.add(pos)
             self._place_wall_block(pos[0], pos[1])
 
     # ── Rendering ─────────────────────────────────────────────────────────────

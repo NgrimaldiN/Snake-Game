@@ -249,6 +249,7 @@ def main():
             print(f"  Score: {result.get('score', '?')}")
 
             state = build_state(result)
+            label_map = {0: ".", 1: "H", 2: "S", 3: "A", 4: "W"}
             print(f"\n  8-channel state grid (head={result['snake'][0]}):")
             for row in range(gh):
                 cells = []
